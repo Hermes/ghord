@@ -4,7 +4,6 @@ import ()
 
 //Cluster Struct
 //	self 			Node
-//	fingerTable		fingerTable
 //	kill			chan bool
 //	app				Application/Callback/Delegate
 //	log				logger

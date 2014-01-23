@@ -1,4 +1,4 @@
-package chord
+package ghord
 
 import (
 //"net"
@@ -8,7 +8,6 @@ import (
 // Transport
 //	connPool	connPool	// A pool of connections to other nodes in the fingerTable
 //	sock 		net.TCPListener		// A TCPListener conn to listen for inbound requests
-
 
 // Each remote node requires a conn to connect to it
 // outConn

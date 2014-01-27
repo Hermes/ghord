@@ -1,6 +1,8 @@
 package ghord
 
-import ()
+import (
+	"net"
+)
 
 // Node
 //	Host		string
@@ -14,7 +16,15 @@ import ()
 //	Node (Embedded Struct)
 //	transport transport
 
-func NewNode(id NodeID, host string) *Node {
-	node := &Node{ID: id, Host: host}
+type Node struct {
+	Id          NodeID
+	Host        string
+	Port        int
+	successor   *Node
+	predecessor *Node
+}
+
+func NewNode(id NodeID, host string, port int) *Node {
+	node := &Node{Id: id, Host: host, Port: port}
 	return node
 }

@@ -188,8 +188,25 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 	// return response
 }
 
-// Find the appropriate node for the given ID
-func (c *Cluster) Route(key NodeID) (*Node, error) {}
+// Find the appropriate node for the given ID (of the nodes we know about)
+func (c *Cluster) Route(key NodeID) (*Node, error) {
+	// check if we are responsible for the key
+	if between(c.self.predecessor.Id, c.self.Id, key) {
+		c.debug("I'm the target. Delievering message %v", key)
+		return c.self, nil
+	}
+
+	// check if our successor is responsible for the key
+	if between(c.self.Id, c.self.successor.Id, key) {
+		// our successor is the desired node
+		c.debug("Our successor is the target. Delievering message %s", key)
+		return c.self.successor
+	}
+
+	// finally check if one our fingers is closer to (or is) the desired node
+	c.debug("Checking fingerTable for target node...")
+	return c.closestPreccedingNode(key)
+}
 
 // Internal methods //
 
@@ -314,6 +331,9 @@ func (c *Cluster) forward(msg *Message, next *Node) bool {}
 
 // We are the desired recipient of the message
 func (c *Cluster) deliver(msg *Message) {}
+
+// Recieved a heatbeat
+func (c *Cluster) onHeartBeat() {}
 
 // Handle any cluster errors
 func (c *Cluster) throwErr(err error) {}

@@ -1,11 +1,15 @@
 package ghord
 
 import (
+	"encoding/json"
+	"errors"
 	"log"
 	"log/syslog"
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/calmh/lfucache"
 )
 
 //Cluster Struct
@@ -44,7 +48,8 @@ type Cluster struct {
 	//transport     transport
 
 	connenctions chan net.Conn
-	connCache    sockPool
+	cacheSize    int
+	connCache    *lfucache.Cache
 }
 
 // A configuration template for a cluster
@@ -72,7 +77,8 @@ func NewCluster(n *Node) *Cluster {
 		connTimeout:  time.Second * 30,
 		numFingers:   hasher.Size() * 8,
 		connnections: make(chan net.Conn),
-		connCache:    newSockPool(),
+		cacheSize:    (hasher.Size() * 8) / 2,
+		connCache:    lfucache.New((hasher.Size() * 8) / 2),
 	}
 }
 
@@ -132,29 +138,29 @@ func (c *Cluster) Stop() {
 	//Notify the cluster that we're leaving the network
 }
 
-// Join the network
+// Join the network, using a node known to be on the network identified by ip:port
 func (c *Cluster) Join(ip string, port int) error {
-	//Initialize the pred/succ + finger table
-	sock, err := c.makeSock(ip, port)
-	if err != nil {
-		return err
-	}
-	defer c.connCache.putSock(sock.host, sock)
 
-	getSuccMsg := NewMessage(SUCC_REQ, nil, empty)
-	err = sock.write(getSuccMsg)
-	if err != nil {
-		return err
-	}
-	var recvSuccMsg *Message
-	err = sock.read(recvSuccMsg)
-	if err != nil {
-		return err
-	}
+	// get our successor in the network
+	address := ip + ":" + strconv.Itoa(port)
+	getSuccMsg := NewMessage(NODE_JOIN, c.self.Id, empty)
+	recvSuccMsg, err := c.sendToIP(address, getSuccMsg)
 
-	// LAST POINT OF WORK
+	// decode the message body, the node representing our predecessor
+	var succ *Node
+	err = json.Unmarshal(recvSuccMsg.value, succ)
+	if err != nil {
+		return err
+	}
+	c.self.successor = succ
 
 	//Notify the rest of the network of our existence
+	err = c.notify(c.self.successor)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Create a new message to be routed through the network
@@ -171,23 +177,67 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {}
 // Handle new connections
 func (c *Cluster) handleConn(conn net.Conn) {}
 
-// Create a new connection to a node, and add it to the sock pool
-func (c *Cluster) makeSock(ip string, port int) (*sock, error) {
-	address := ip + ":" + strconv.Itoa(port)
-	conn, err := net.DialTimeout("tcp", address, c.connTimeout)
-	if err != nil {
-		c.error("Couldnt get tcp conn to node: %v", err)
-		return nil, err
+// Create a new connection (or get it from the cache) to a node, and add it to the sock pool
+// NOTE: the ...int for port is a hack to get overloading (or something like it) working
+func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
+
+	// Normiliza the address (either given full address as string, or as ip:port components)
+	var address string
+	if len(port) == 1 {
+		address = addr + ":" + strconv.Itoa(port[0])
+	} else if len(port) > 1 {
+		return nil, errors.New("Malformed address")
+	} else {
+		address = addr
+	}
+
+	tempconn, found := c.connCache.Access(address)
+	var conn *net.Conn
+	if !found {
+		conn, err := net.DialTimeout("tcp", address, c.connTimeout)
+		if err != nil {
+			c.error("Couldnt get tcp conn to node: %v", err)
+			return nil, err
+		}
+	} else {
+		conn = tempconn.(*net.Conn)
 	}
 
 	return newSock(conn), nil
 }
 
-// Send Heartbeats to connected conns
+//Put the sock back on to the conn, (thread safe? ...nope lol)
+func (c *Cluster) putSock(addr string, s *sock) {
+	s.used = time.Now()
+	c.connCache.Insert(addr, s)
+}
+
+// Send Heartbeats to connected conns (in the cache or finger?)
 func (c *Cluster) sendHeartbeats() {}
 
-// Send a message to a Specific IP in the network
-func (c *Cluster) sendToIP(hostname string, msg Message) {}
+// Send a message to a Specific IP in the network, block for messsage?
+func (c *Cluster) sendToIP(addr string, msg Message) (*Message, error) {
+	sock, err := c.getSock(addr)
+	if err != nil {
+		return nil, err
+	}
+	defer c.putSock(sock.host)
+
+	// Send the message to the connected peer
+	err = sock.write(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	// read the response
+	var recvMsg *Message
+	err = sock.read(recvMsg)
+	if err != nil {
+		return nil, err
+	}
+
+	return recvMsg, nil
+}
 
 // API Method Calls //
 
@@ -200,11 +250,14 @@ func (c *Cluster) findPredeccessor(key NodeID) (*Node, error) {}
 // CHORD API - Find the closest preceding node in the finger table
 func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {}
 
-// CHORD API - Stabilize the fingerTable
+// CHORD API - Stabilize successor/predecessor pointers
 func (c *Cluster) stabilize() {}
 
 // CHORD API - Notify a Node of our existence
 func (c *Cluster) notify(n *Node) {}
+
+// CHORD API - fix fingers
+func (c *Cluster) fixFingers() {}
 
 // Application handlers
 

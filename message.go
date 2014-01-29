@@ -12,13 +12,13 @@ var (
 
 // Message types
 const (
-	NODE_JOIN      = iota // A node is joining the network
-	NODE_LEAVE            // A node is leaving the network
-	NODE_HEARTBEAT        // Heartbeat signal
-	NODE_NOTIFY           // Notified of node existense
-	NODE_ANN              // A node has been announced
-	SUCC_REQ              // A request for a nodes successor
-	PRED_REQ              // A request for a nodes predecessor
+	NODE_JOIN   = iota // A node is joining the network
+	NODE_LEAVE         // A node is leaving the network
+	HEARTBEAT          // Heartbeat signal
+	NODE_NOTIFY        // Notified of node existense
+	NODE_ANN           // A node has been announced
+	SUCC_REQ           // A request for a nodes successor
+	PRED_REQ           // A request for a nodes predecessor
 )
 
 // Represents a message in the DHT network
@@ -32,12 +32,13 @@ type Message struct {
 }
 
 // Create a new message
-func NewMessage(purpose int, key NodeID, body []byte) *Message {
+func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) *Message {
 	// Sender and Target are filled in by the cluster upon sending the message
 	return &Message{
 		key:     key,
 		value:   body,
 		purpose: purpose,
+		sender:  c.self.Id,
 		hops:    0,
 	}
 }

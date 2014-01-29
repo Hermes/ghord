@@ -37,7 +37,7 @@ type Cluster struct {
 	apps          []Application
 	log           log
 	logLevel      int
-	fingerTable   []*Node
+	fingerTable   fingerTable
 	numFingers    int
 	stabilizeMin  time.Duration
 	stabilizeMax  time.Duration
@@ -167,7 +167,26 @@ func (c *Cluster) Join(ip string, port int) error {
 func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) Message {}
 
 // Send a message through the network to it's intended Node
-func (c *Cluster) Send(msg Message) err {}
+func (c *Cluster) Send(msg Message) (*Message, error) {
+	// find the appropriate node
+	target, err := c.Route(msg.key)
+	if err != nil {
+		return err
+	}
+	if target != nil {
+		if msg.purpose > PRED_REQ {
+			c.deliver(msg)
+		}
+		return nil, nil
+	}
+	// decide if our application permits the message
+
+	// send the message
+
+	// wait for repsonse
+
+	// return response
+}
 
 // Find the appropriate node for the given ID
 func (c *Cluster) Route(key NodeID) (*Node, error) {}
@@ -213,7 +232,31 @@ func (c *Cluster) putSock(addr string, s *sock) {
 }
 
 // Send Heartbeats to connected conns (in the cache or finger?)
-func (c *Cluster) sendHeartbeats() {}
+func (c *Cluster) sendHeartbeats() {
+
+	// iterate over the cached conns, and send heartbeat signals,
+	// if there's no response then remove it from the cache
+	// we're using the lfucache EvictIf function because it gives us the
+	// ability to iterate over all the items in the cache (connections)
+	c.connCache.EvictIf(func(tempSock interface{}) {
+		go func() {
+			sock := tempSock.(*sock)
+
+			// Craft a heartbeat message, send and listen for the resp,
+			// if there's no response remove from cache (and finger?)
+			heartbeat := c.NewMessage(NODE_HEARTBEAT, nil, empty)
+			ack, err := c.sendToIP(sock.host, heartbeat)
+			if err != nil {
+				c.connCache.Delete(sock.host)
+			}
+		}()
+
+		// Notify lfucache NOT to delete this item
+		return false
+	})
+
+	//Should I also iterate over the finger table?
+}
 
 // Send a message to a Specific IP in the network, block for messsage?
 func (c *Cluster) sendToIP(addr string, msg Message) (*Message, error) {
@@ -254,7 +297,12 @@ func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {}
 func (c *Cluster) stabilize() {}
 
 // CHORD API - Notify a Node of our existence
-func (c *Cluster) notify(n *Node) {}
+func (c *Cluster) notify(n *Node) {
+	ann := c.NewMessage(NODE_ANN, n.Id, empty)
+	c.Send(ann)
+
+	// Is there more?
+}
 
 // CHORD API - fix fingers
 func (c *Cluster) fixFingers() {}
@@ -262,7 +310,10 @@ func (c *Cluster) fixFingers() {}
 // Application handlers
 
 // Decide wheather or not to continue forwarding the message through the network
-func (c *Cluster) forward(msg Message, tid NodeID) bool {}
+func (c *Cluster) forward(msg *Message, next *Node) bool {}
+
+// We are the desired recipient of the message
+func (c *Cluster) deliver(msg *Message) {}
 
 // Handle any cluster errors
 func (c *Cluster) throwErr(err error) {}

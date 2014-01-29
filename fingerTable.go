@@ -5,8 +5,8 @@ import (
 )
 
 type finger struct {
-	key  NodeID
-	node Node
+	start NodeID
+	node  *Node
 }
 
 type fingerTable struct {

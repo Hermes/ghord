@@ -10,7 +10,7 @@ type finger struct {
 }
 
 type fingerTable struct {
-	table map[NodeID]finger
+	table []finger
 	sync.Mutex
 }
 

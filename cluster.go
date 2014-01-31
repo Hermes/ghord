@@ -110,6 +110,7 @@ func (c *Cluster) Listen() error {
 		}
 	}(ln, c.connections)
 
+	// Also add stabilization ticker
 	for {
 		select {
 		case <-c.kill:
@@ -173,7 +174,7 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 	if err != nil {
 		return err
 	}
-	if target != nil {
+	if target == c.self {
 		if msg.purpose > PRED_REQ {
 			c.deliver(msg)
 		}
@@ -191,13 +192,13 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 // Find the appropriate node for the given ID (of the nodes we know about)
 func (c *Cluster) Route(key NodeID) (*Node, error) {
 	// check if we are responsible for the key
-	if between(c.self.predecessor.Id, c.self.Id, key) {
+	if betweenRightInc(c.self.predecessor.Id, c.self.Id, key) {
 		c.debug("I'm the target. Delievering message %v", key)
 		return c.self, nil
 	}
 
 	// check if our successor is responsible for the key
-	if between(c.self.Id, c.self.successor.Id, key) {
+	if betweenRightInc(c.self.Id, c.self.successor.Id, key) {
 		// our successor is the desired node
 		c.debug("Our successor is the target. Delievering message %s", key)
 		return c.self.successor
@@ -308,7 +309,17 @@ func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {}
 func (c *Cluster) findPredeccessor(key NodeID) (*Node, error) {}
 
 // CHORD API - Find the closest preceding node in the finger table
-func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {}
+func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
+	prev := c.self
+	for _, finger := range c.fingerTable.table {
+		if betweenRightInc(prev.Id, finger.node.Id, key) {
+			return finger.node, nil
+		}
+		prev = finger.node
+	}
+
+	return nil, errors.New("No node exists for id: %s", key)
+}
 
 // CHORD API - Stabilize successor/predecessor pointers
 func (c *Cluster) stabilize() {}

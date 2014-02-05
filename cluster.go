@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"log/syslog"
+	"math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -85,6 +86,8 @@ func NewCluster(n *Node) *Cluster {
 // Updates configuration for Cluter, Can only be used before cluster is started via either Start() or Join()
 func (c *Cluster) Config(config) {}
 
+// Public API
+
 // Start the cluster, listen and participate in the network
 func (c *Cluster) Listen() error {
 	portStr := strconv.Itoa(c.self.Port)
@@ -115,10 +118,14 @@ func (c *Cluster) Listen() error {
 		select {
 		case <-c.kill:
 			return nil
-		case <-time.After(time.Duration(c.heartbeatFreq)):
+		case <-time.After(c.heartbeatFreq):
 			c.debug("Sending heartbeats")
 			go c.sendHeartbeats()
 			break
+		// Run the stabilize routine randomly between stabilizeMin and stabilizeMax
+		case <-time.After(time.Duration(randRange(c.stabilizeMin.Nanoseconds(), c.stabilizeMax.Nanoseconds()))):
+			c.debug("Running stabilize routine")
+			c.stabilize()
 		case conn := <-connections:
 			c.debug("Handling connection")
 			go c.handleConn(conn)
@@ -128,8 +135,6 @@ func (c *Cluster) Listen() error {
 
 	return nil
 }
-
-// Public API
 
 //Stop the cluster
 func (c *Cluster) Stop() {
@@ -144,7 +149,7 @@ func (c *Cluster) Join(ip string, port int) error {
 
 	// get our successor in the network
 	address := ip + ":" + strconv.Itoa(port)
-	getSuccMsg := NewMessage(NODE_JOIN, c.self.Id, empty)
+	getSuccMsg := NewMessage(NODE_JOIN, c.self.Id, nil)
 	recvSuccMsg, err := c.sendToIP(address, getSuccMsg)
 
 	// decode the message body, the node representing our predecessor
@@ -164,12 +169,9 @@ func (c *Cluster) Join(ip string, port int) error {
 	return nil
 }
 
-// Create a new message to be routed through the network
-func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) Message {}
-
 // Send a message through the network to it's intended Node
 func (c *Cluster) Send(msg Message) (*Message, error) {
-	// find the appropriate node
+	// find the appropriate node in our list of known nodes
 	target, err := c.Route(msg.key)
 	if err != nil {
 		return err
@@ -181,12 +183,15 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 		return nil, nil
 	}
 	// decide if our application permits the message
+	forward := c.forward(msg, target)
 
 	// send the message
+	recv, err := c.sendToIP(target.Host, msg)
+	if err != nil {
+		c.throwErr(err)
+	}
 
-	// wait for repsonse
-
-	// return response
+	return recv
 }
 
 // Find the appropriate node for the given ID (of the nodes we know about)
@@ -213,6 +218,9 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {
 
 // Handle new connections
 func (c *Cluster) handleConn(conn net.Conn) {}
+
+// Handle an internal network MSG
+func (c *Cluster) handleMessage(msg Message) {}
 
 // Create a new connection (or get it from the cache) to a node, and add it to the sock pool
 // NOTE: the ...int for port is a hack to get overloading (or something like it) working
@@ -262,7 +270,7 @@ func (c *Cluster) sendHeartbeats() {
 
 			// Craft a heartbeat message, send and listen for the resp,
 			// if there's no response remove from cache (and finger?)
-			heartbeat := c.NewMessage(NODE_HEARTBEAT, nil, empty)
+			heartbeat := c.NewMessage(NODE_HEARTBEAT, nil, nil)
 			ack, err := c.sendToIP(sock.host, heartbeat)
 			if err != nil {
 				c.connCache.Delete(sock.host)
@@ -303,16 +311,30 @@ func (c *Cluster) sendToIP(addr string, msg Message) (*Message, error) {
 // API Method Calls //
 
 // CHORD API - Find the first successor for the given ID
-func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {}
+func (c *Cluster) findSuccessor(key NodeID) (Node, error) {
+	request := c.NewMessage(SUCC_REQ, key, nil)
+	response, err := c.Send(request)
+	if err != nil {
+
+	}
+
+	var node Node
+	err = json.Unmarshal(response.value, &node)
+	if err != nil {
+		// call throwErr?
+		return nil, err
+	}
+
+	return node, nil
+}
 
 // CHORD API - Find the first predecessor for the given ID
-func (c *Cluster) findPredeccessor(key NodeID) (*Node, error) {}
+// func (c *Cluster) findPredeccessor(key NodeID) (*Node, error) {}
 
 // CHORD API - Find the closest preceding node in the finger table
 func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
-	prev := c.self
 	for _, finger := range c.fingerTable.table {
-		if betweenRightInc(prev.Id, finger.node.Id, key) {
+		if betweenRightInc(c.self.Id, finger.node.Id, key) {
 			return finger.node, nil
 		}
 		prev = finger.node
@@ -322,11 +344,39 @@ func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
 }
 
 // CHORD API - Stabilize successor/predecessor pointers
-func (c *Cluster) stabilize() {}
+func (c *Cluster) stabilize() error {
+	// craft message for pred_req
+	predReq := c.NewMessage(PRED_REQ, c.self.successor.Id, nil)
+	resp, err := c.sendToIP(c.self.successor.Host, predReq)
+
+	if err != nil {
+		return err
+	}
+
+	// Decode response into a node obj
+	var predecessor *Node
+	err = json.Unmarshal(resp.value, &predecessor)
+
+	// check if our sucessor has a diff predecessor then us
+	// if so notify the new successor and update our own records
+	if c.self.Id != predecessor.Id {
+		c.debug("Found new predecessor! Id: %v", predecessor.Id)
+		notifyReq := c.NewMessage(NODE_NOTIFY, predecessor.Id, nil)
+		resp, err := c.sendToIP(predecessor.Host, notifyReq)
+		if err != nil {
+			return err
+		}
+
+		// update our own successor
+		c.self.successor = predecessor
+	}
+
+	return nil
+}
 
 // CHORD API - Notify a Node of our existence
 func (c *Cluster) notify(n *Node) {
-	ann := c.NewMessage(NODE_ANN, n.Id, empty)
+	ann := c.NewMessage(NODE_ANN, n.Id, nil)
 	c.Send(ann)
 
 	// Is there more?
@@ -347,7 +397,15 @@ func (c *Cluster) deliver(msg *Message) {}
 func (c *Cluster) onHeartBeat() {}
 
 // Handle any cluster errors
-func (c *Cluster) throwErr(err error) {}
+func (c *Cluster) throwErr(err error) {
+	// Send the error through all the embedded apps
+	for _, app := range c.apps {
+		app.OnError(err)
+	}
+
+	c.debug(err.Error())
+	c.err(err.Error())
+}
 
 // UTILITIES
 func (c *Cluster) debug(format string, v ...interface{}) {

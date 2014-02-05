@@ -44,12 +44,3 @@ func (n NodeID) Greater(id NodeID) bool {
 func (n NodeId) Equal(id NodeID) bool {
 	return bytes.Compare(n, id) == 0
 }
-
-// Checks if key is between id1 and id2 exclusivly
-func between(id1, id2, key NodeID) bool {}
-
-// Checks if key E (id1, id2]
-func betweenRightInc(id1, id2, key NodeID) bool {}
-
-// Checks if key E [id1, id2)
-func betweenLeftInc(id1, id2, key NodeID) bool {}

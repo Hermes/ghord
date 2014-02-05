@@ -6,10 +6,6 @@ import ()
 //NOTES
 //
 
-var (
-	empty = []byte{}
-)
-
 // Message types
 const (
 	NODE_JOIN   = iota // A node is joining the network

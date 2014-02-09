@@ -264,6 +264,7 @@ func (c *Cluster) sendHeartbeats() {
 	// if there's no response then remove it from the cache
 	// we're using the lfucache EvictIf function because it gives us the
 	// ability to iterate over all the items in the cache (connections)
+	// will look into a better cache iteration method later.
 	c.connCache.EvictIf(func(tempSock interface{}) {
 		go func() {
 			sock := tempSock.(*sock)
@@ -277,11 +278,12 @@ func (c *Cluster) sendHeartbeats() {
 			}
 		}()
 
-		// Notify lfucache NOT to delete this item
+		// Notify lfucache NOT to delete this item for now (so we can run these in parallel)
 		return false
 	})
 
-	//Should I also iterate over the finger table?
+	// Should I also iterate over the finger table?
+	// for now no...
 }
 
 // Send a message to a Specific IP in the network, block for messsage?
@@ -376,6 +378,7 @@ func (c *Cluster) stabilize() error {
 
 // CHORD API - Notify a Node of our existence
 func (c *Cluster) notify(n *Node) {
+	c.debug("Notifying node: %v", n.Id)
 	ann := c.NewMessage(NODE_ANN, n.Id, nil)
 	c.Send(ann)
 
@@ -388,7 +391,15 @@ func (c *Cluster) fixFingers() {}
 // Application handlers
 
 // Decide wheather or not to continue forwarding the message through the network
-func (c *Cluster) forward(msg *Message, next *Node) bool {}
+func (c *Cluster) forward(msg *Message, next *Node) bool {
+	c.debug("Checking if we should forward the given message")
+	forward = true
+	for _, app := range c.apps {
+		forward &= app.OnForward(msg, next)
+	}
+
+	return forward
+}
 
 // We are the desired recipient of the message
 func (c *Cluster) deliver(msg *Message) {}

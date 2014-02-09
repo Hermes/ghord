@@ -23,7 +23,7 @@ type Application interface {
 	OnDeliver(msg Message)
 
 	// Recieved a message that needs to be routed onwards
-	OnForward(msg *Message, nextId NodeID) bool // return False if Wendy should not forward
+	OnForward(msg *Message, node *Node) bool // return False if Wendy should not forward
 
 	// Added a new successor to our figerTable
 	//OnNewFinger(leafset []*Node)

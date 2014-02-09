@@ -25,6 +25,6 @@ type Node struct {
 }
 
 func NewNode(id NodeID, host string, port int) *Node {
-	node := &Node{Id: id, Host: host, Port: port}
+	node := &Node{Id: id, Haost: host, Port: port}
 	return node
 }

@@ -62,7 +62,7 @@ type ClusterConfig struct {
 }
 
 var (
-	logger, _ = syslog.New(syslog.LOG_ERR, "[HERMES]")
+	logger, _ = syslog.New(syslog.LOG_ERR, "[GHORD]")
 )
 
 // Create a new Cluster
@@ -217,9 +217,11 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {
 // Internal methods //
 
 // Handle new connections
-func (c *Cluster) handleConn(conn net.Conn) {}
+func (c *Cluster) handleConn(conn net.Conn) {
 
-// Handle an internal network MSG
+}
+
+// Handle an internal network Message
 func (c *Cluster) handleMessage(msg Message) {}
 
 // Create a new connection (or get it from the cache) to a node, and add it to the sock pool
@@ -242,6 +244,7 @@ func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 		conn, err := net.DialTimeout("tcp", address, c.connTimeout)
 		if err != nil {
 			c.error("Couldnt get tcp conn to node: %v", err)
+			c.throwErr(err)
 			return nil, err
 		}
 	} else {

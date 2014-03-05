@@ -1,4 +1,8 @@
 ghord
 =======
 
-A go implementation of the Chord DHT designed after the wendy Kadmalia implementation
+A pure go implementation of the Chord DHT designed after the wendy Kadmalia DHT implementation
+
+
+
+

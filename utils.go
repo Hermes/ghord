@@ -1,6 +1,7 @@
 package ghord
 
 import (
+	"bytes"
 	"math"
 	"math/rand"
 )
@@ -16,10 +17,41 @@ func randRange(min, max int64) int64 {
 }
 
 // Checks if key is between id1 and id2 exclusivly
-func between(id1, id2, key NodeID) bool {}
+func between(id1, id2, key NodeID) bool {
+	return bytes.Compare(key, id1) == 1 &&
+		bytes.Compare(key, id2) == -1
+}
 
 // Checks if key E (id1, id2]
-func betweenRightInc(id1, id2, key NodeID) bool {}
+func betweenRightInc(id1, id2, key NodeID) bool {
+	return (bytes.Compare(key, id1) == 1 &&
+		bytes.Compare(key, id2) == -1) ||
+		bytes.Equal(key, id2)
+}
 
 // Checks if key E [id1, id2)
-func betweenLeftInc(id1, id2, key NodeID) bool {}
+func betweenLeftInc(id1, id2, key NodeID) bool {
+	return (bytes.Compare(key, id1) == 1 &&
+		bytes.Compare(key, id2) == -1) ||
+		bytes.Equal(key, id1)
+}
+
+// Cluster logging //
+
+func (c *Cluster) debug(format string, v ...interface{}) {
+	if c.logLevel <= syslog.LOG_DEBUG {
+		c.log.Printf(format, v...)
+	}
+}
+
+func (c *Cluster) warn(format string, v ...interface{}) {
+	if c.logLevel <= syslog.LOG_WARNING {
+		c.log.Printf(format, v...)
+	}
+}
+
+func (c *Cluster) err(format string, v ...interface{}) {
+	if c.logLevel <= syslog.LOG_ERR {
+		c.log.Printf(format, v...)
+	}
+}

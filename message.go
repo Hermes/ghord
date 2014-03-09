@@ -8,13 +8,15 @@ import ()
 
 // Message types
 const (
-	NODE_JOIN   = iota // A node is joining the network
-	NODE_LEAVE         // A node is leaving the network
-	HEARTBEAT          // Heartbeat signal
-	NODE_NOTIFY        // Notified of node existense
-	NODE_ANN           // A node has been announced
-	SUCC_REQ           // A request for a nodes successor
-	PRED_REQ           // A request for a nodes predecessor
+	NODE_JOIN    = iota // A node is joining the network
+	NODE_LEAVE          // A node is leaving the network
+	HEARTBEAT           // Heartbeat signal
+	NODE_NOTIFY         // Notified of node existense
+	NODE_ANN            // A node has been announced
+	SUCC_REQ            // A request for a nodes successor
+	PRED_REQ            // A request for a nodes predecessor
+	STATUS_ERROR        // Response indicating an error
+	STATUS_OK           // Simple status OK response
 )
 
 // Represents a message in the DHT network
@@ -39,17 +41,24 @@ func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) *Message {
 	}
 }
 
-// Utilies for creating specific messages (Needed???)
-func nodeJoinMessage(key NodeID) *Message {
-	return NewMessage(NODE_J, key, empty)
+// Helper utilies for creating specific messages
+
+func (c *Cluster) nodeJoinMessage(key NodeID) *Message {
+	return NewMessage(NODE_J, key, nil)
 }
 
-func heartBeatMessage(key NodeID) *Message {
-	return NewMessage(NODE_HEARTBEAT, key, empty)
+func (c *Cluster) heartBeatMessage(key NodeID) *Message {
+	return NewMessage(NODE_HEARTBEAT, key, nil)
 }
 
-func notifyMessage(key NodeID) *Message {
-	return NewMessage(NODE_NOTIFY, key, empty)
+func (c *Cluster) notifyMessage(key NodeID) *Message {
+	return NewMessage(NODE_NOTIFY, key, nil)
 }
 
-// ... etc ...
+func (c *Cluster) statusOKMessage(key NodeID) *Message {
+	return c.NewMessage(STATUS_OK, key, nil)
+}
+
+func (c *Cluster) statusErrMessage(key NodeID, err error) *Message {
+	return c.NewMessage(STATUS_ERROR, target, []byte(err.Error()))
+}

@@ -22,8 +22,8 @@ func newSock(conn *net.TCPConn) *sock {
 		host: conn.RemoteAddr().String(),
 		conn: conn,
 		used: time.Now(),
-		enc:  gob.NewEncoder(conn),
-		dec:  gob.NewDecoder(conn),
+		enc:  NewEncoder(conn),
+		dec:  NewDecoder(conn),
 	}
 }
 
@@ -51,8 +51,7 @@ func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 		address = addr
 	}
 
-	tempconn, found := c.connCache.Access(address)
-	var conn *net.Conn
+	s, found := c.connCache.Access(address)
 	if !found {
 		conn, err := net.DialTimeout("tcp", address, c.connTimeout)
 		if err != nil {
@@ -60,15 +59,13 @@ func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 			c.throwErr(err)
 			return nil, err
 		}
-	} else {
-		conn = tempconn.(*net.Conn)
+		return newSock(conn)
 	}
-
-	return newSock(conn), nil
+	return s, nil
 }
 
 //Put the sock back on to the conn, (thread safe? ...nope lol)
-func (c *Cluster) putSock(addr string, s *sock) {
+func (c *Cluster) putSock(s *sock) {
 	s.used = time.Now()
-	c.connCache.Insert(addr, s)
+	c.connCache.Insert(s.host, s)
 }

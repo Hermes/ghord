@@ -54,7 +54,7 @@ type Cluster struct {
 }
 
 // A configuration template for a cluster
-type ClusterConfig struct {
+type ClusterOptions struct {
 	StabilizeMin time.Duration
 	StabilizeMax time.Duration
 	Log          log
@@ -66,7 +66,7 @@ var (
 )
 
 // Create a new Cluster
-func NewCluster(n *Node) *Cluster {
+func NewCluster(n *Node, options ...ClusterOptions) *Cluster {
 	return &Cluster{
 		self: n,
 		kill: make(chan bool),
@@ -218,46 +218,84 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {
 
 // Handle new connections
 func (c *Cluster) handleConn(conn net.Conn) {
-
-}
-
-// Handle an internal network Message
-func (c *Cluster) handleMessage(msg Message) {}
-
-// Create a new connection (or get it from the cache) to a node, and add it to the sock pool
-// NOTE: the ...int for port is a hack to get overloading (or something like it) working
-func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
-
-	// Normiliza the address (either given full address as string, or as ip:port components)
-	var address string
-	if len(port) == 1 {
-		address = addr + ":" + strconv.Itoa(port[0])
-	} else if len(port) > 1 {
-		return nil, errors.New("Malformed address")
-	} else {
-		address = addr
+	defer conn.Close()
+	var msg Message
+	decoder := NewDecoder(conn)
+	encoder := NewEncoder(conn)
+	if err := decoder.Decode(&msg); err != nil {
+		c.throwErr(err)
+		return
 	}
+	msg.hops++
+	c.debug("Recieved a message with purpose %v from node %v", msg.purpose, msg.sender)
 
-	tempconn, found := c.connCache.Access(address)
-	var conn *net.Conn
-	if !found {
-		conn, err := net.DialTimeout("tcp", address, c.connTimeout)
+	switch msg.purpose {
+
+	// A node wants to join the network
+	// we need to find his appropriate successor
+	case NODE_JOIN:
+		succReq := c.NewMessage(SUCC_REQ, msg.sender, nil)
+		resp, err := c.Send(succReq)
 		if err != nil {
-			c.error("Couldnt get tcp conn to node: %v", err)
+			errMsg := c.statusErrMessage(msg.sender, err)
+			encoder.Encode(errMsg)
 			c.throwErr(err)
-			return nil, err
+			c.err(err.Error())
+			break
 		}
-	} else {
-		conn = tempconn.(*net.Conn)
+
+		// respond with the found successor
+		encoder.Encode(resp)
+		break
+
+	// A node wants to leave the network
+	// so update our finger table accordingly
+	case NODE_LEAVE:
+		break
+
+	// Recieved a heartbeat message from a connected
+	// client, let them know were still alive
+	case HEARTBEAT:
+		heartbeatMsg := c.NewMessage(STATUS_OK, msg.sender, nil)
+		encoder.Encode(heartbeatMsg)
+		break
+
+	// We've been notified of a new predecessor
+	// node, so update our fingerTable
+	case NODE_NOTIFY:
+		var predecessor *Node
+		err := json.Unmarshal(msg.value, &predecessor)
+		if err != nil {
+			errMsg := c.statusErrMessage(msg.sender, err)
+			encoder.Encode(errMsg)
+			c.throwErr(err)
+			c.err(err.Error())
+			break
+		}
+		break
+
+	// nil
+	case NODE_ANN:
+		break
+
+	// Recieved a successor request from a node,
+	case SUCC_REQ:
+		resp, err := c.onSuccessorRequest(msg)
+		if err != nil {
+			c.throwErr(err)
+			c.err(err.Error())
+		}
+		encoder.Encode(resp)
+		break
+
+	// Recieved a predecessor request from a node
+	case PRED_REQ:
+		break
+
+	// Not an internal message, forward it on
+	default:
+		c.Send(msg)
 	}
-
-	return newSock(conn), nil
-}
-
-//Put the sock back on to the conn, (thread safe? ...nope lol)
-func (c *Cluster) putSock(addr string, s *sock) {
-	s.used = time.Now()
-	c.connCache.Insert(addr, s)
 }
 
 // Send Heartbeats to connected conns (in the cache or finger?)
@@ -281,7 +319,7 @@ func (c *Cluster) sendHeartbeats() {
 			}
 		}()
 
-		// Notify lfucache NOT to delete this item for now (so we can run these in parallel)
+		// Immediately notify cache NOT to delete this item for now (so we can run these in parallel)
 		return false
 	})
 
@@ -295,7 +333,7 @@ func (c *Cluster) sendToIP(addr string, msg Message) (*Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer c.putSock(sock.host)
+	defer c.putSock(sock)
 
 	// Send the message to the connected peer
 	err = sock.write(msg)
@@ -313,20 +351,23 @@ func (c *Cluster) sendToIP(addr string, msg Message) (*Message, error) {
 	return recvMsg, nil
 }
 
-// API Method Calls //
+// Chord API Method Calls //
 
 // CHORD API - Find the first successor for the given ID
-func (c *Cluster) findSuccessor(key NodeID) (Node, error) {
+func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {
 	request := c.NewMessage(SUCC_REQ, key, nil)
 	response, err := c.Send(request)
 	if err != nil {
-
+		return nil, err
 	}
 
-	var node Node
+	if response.purpose == STATUS_ERROR {
+		return nil, errors.New(string(response.value))
+	}
+
+	var node *Node
 	err = json.Unmarshal(response.value, &node)
 	if err != nil {
-		// call throwErr?
 		return nil, err
 	}
 
@@ -356,6 +397,10 @@ func (c *Cluster) stabilize() error {
 
 	if err != nil {
 		return err
+	} else if predReq.purpose == ERROR {
+		err = errors.New("Error durring stabilize routine... Couldnt get predecessor request")
+		c.err(err)
+		c.throwErr(err.Error())
 	}
 
 	// Decode response into a node obj
@@ -391,7 +436,25 @@ func (c *Cluster) notify(n *Node) {
 // CHORD API - fix fingers
 func (c *Cluster) fixFingers() {}
 
-// Application handlers
+//////////////////////////
+//						//
+// Application handlers //
+//						//
+//////////////////////////
+
+func (c *Cluster) onDeliver(msg *Message) {}
+
+func (c *Cluster) onHeartBeat(msg *Message) *Message {}
+
+func (c *Cluster) onNodeJoin(msg *Message) {}
+
+func (c *Cluster) onNodeLeave(msg *Message) {}
+
+func (c *Cluster) onNotify(msg *Message) {}
+
+func (c *Cluster) onSuccessorRequest(msg *Message) (*Message, error) {}
+
+func (c *Cluster) onPredecessorRequest(msg *Message) (*Message, error) {}
 
 // Decide wheather or not to continue forwarding the message through the network
 func (c *Cluster) forward(msg *Message, next *Node) bool {
@@ -404,12 +467,6 @@ func (c *Cluster) forward(msg *Message, next *Node) bool {
 	return forward
 }
 
-// We are the desired recipient of the message
-func (c *Cluster) deliver(msg *Message) {}
-
-// Recieved a heatbeat
-func (c *Cluster) onHeartBeat() {}
-
 // Handle any cluster errors
 func (c *Cluster) throwErr(err error) {
 	// Send the error through all the embedded apps
@@ -417,25 +474,6 @@ func (c *Cluster) throwErr(err error) {
 		app.OnError(err)
 	}
 
-	c.debug(err.Error())
+	//c.debug(err.Error())
 	c.err(err.Error())
-}
-
-// UTILITIES
-func (c *Cluster) debug(format string, v ...interface{}) {
-	if c.logLevel <= syslog.LOG_DEBUG {
-		c.log.Printf(format, v...)
-	}
-}
-
-func (c *Cluster) warn(format string, v ...interface{}) {
-	if c.logLevel <= syslog.LOG_WARNING {
-		c.log.Printf(format, v...)
-	}
-}
-
-func (c *Cluster) err(format string, v ...interface{}) {
-	if c.logLevel <= syslog.LOG_ERR {
-		c.log.Printf(format, v...)
-	}
 }

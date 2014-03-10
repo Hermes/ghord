@@ -397,7 +397,7 @@ func (c *Cluster) stabilize() error {
 
 	if err != nil {
 		return err
-	} else if predReq.purpose == ERROR {
+	} else if resp.purpose == ERROR {
 		err = errors.New("Error durring stabilize routine... Couldnt get predecessor request")
 		c.err(err)
 		c.throwErr(err.Error())

@@ -17,6 +17,7 @@ const (
 	PRED_REQ            // A request for a nodes predecessor
 	STATUS_ERROR        // Response indicating an error
 	STATUS_OK           // Simple status OK response
+
 )
 
 // Represents a message in the DHT network
@@ -39,6 +40,36 @@ func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) *Message {
 		sender:  c.self.Id,
 		hops:    0,
 	}
+}
+
+// Get the message key
+func (msg *Message) Key() NodeID {
+	return msg.key
+}
+
+// Get the message value
+func (msg *Message) Value() []byte {
+	return msg.value
+}
+
+// Get the message purpose
+func (msg *Message) Purpose() int {
+	return msg.purpose
+}
+
+// Get the message hops taken
+func (msg *Message) Hops() int {
+	return msg.hops
+}
+
+// Get the message target
+func (msg *Message) Target() NodeID {
+	return msg.target
+}
+
+// Get the message sender
+func (msg *Message) Sender() NodeID {
+	return msg.sender
 }
 
 // Helper utilies for creating specific messages

@@ -41,6 +41,6 @@ func (n NodeID) Greater(id NodeID) bool {
 }
 
 // Returns true iff NodeID n == id
-func (n NodeId) Equal(id NodeID) bool {
+func (n NodeID) Equal(id NodeID) bool {
 	return bytes.Compare(n, id) == 0
 }

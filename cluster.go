@@ -113,7 +113,6 @@ func (c *Cluster) Listen() error {
 		}
 	}(ln, c.connections)
 
-	// Also add stabilization ticker
 	for {
 		select {
 		case <-c.kill:
@@ -146,25 +145,43 @@ func (c *Cluster) Stop() {
 
 // Join the network, using a node known to be on the network identified by ip:port
 func (c *Cluster) Join(ip string, port int) error {
-
+	c.debug("Joing Chord DHT using source node %v:%v", ip, port)
 	// get our successor in the network
 	address := ip + ":" + strconv.Itoa(port)
-	getSuccMsg := NewMessage(NODE_JOIN, c.self.Id, nil)
-	recvSuccMsg, err := c.sendToIP(address, getSuccMsg)
-
-	// decode the message body, the node representing our predecessor
+	succReq := NewMessage(NODE_JOIN, c.self.Id, nil)
+	resp, err := c.sendToIP(address, succReq)
+	if err != nil {
+		return err
+	} else if resp.purpose == STATUS_ERROR {
+		return errors.New(string(resp.value))
+	}
 	var succ *Node
-	err = json.Unmarshal(recvSuccMsg.value, succ)
+	err = json.Unmarshal(resp.value, &succ)
 	if err != nil {
 		return err
 	}
 	c.self.successor = succ
 
-	//Notify the rest of the network of our existence
-	resp, err := c.notify(c.self.successor)
+	// Get our successors predecessor
+	predReq := c.NewMessage(PRED_REQ, succ, nil)
+	resp, err = c.sendToIP(succ.Host, predReq)
 	if err != nil {
 		return err
-	} else if resp.purpose == ERROR {
+	} else if resp.purpose == STATUS_ERROR {
+		return errors.New(string(resp.value))
+	}
+	var pred *Node
+	err = json.Unmarshal(resp.value, &pred)
+	if err != nil {
+		return err
+	}
+	c.self.predecessor = pred
+
+	// Notify the specified successor of our existence
+	resp, err = c.notify(c.self.successor)
+	if err != nil {
+		return err
+	} else if resp.purpose == STATUS_ERROR {
 		return errors.New(string(resp.value))
 	}
 
@@ -173,6 +190,7 @@ func (c *Cluster) Join(ip string, port int) error {
 
 // Send a message through the network to it's intended Node
 func (c *Cluster) Send(msg Message) (*Message, error) {
+	c.debug("Sending message with key %v", msg.key)
 	// find the appropriate node in our list of known nodes
 	target, err := c.Route(msg.key)
 	if err != nil {
@@ -181,7 +199,7 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 	}
 	if target == c.self {
 		if msg.purpose > PRED_REQ {
-			c.deliver(msg)
+			c.onDeliver(msg)
 		}
 		return nil, nil
 	}
@@ -193,7 +211,7 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 	if err != nil {
 		c.throwErr(err)
 		return nil, err
-	} else if resp.purpose == ERROR {
+	} else if resp.purpose == STATUS_ERROR {
 		c.throwErr(err)
 		return resp, errors.New(string(resp.value))
 	}
@@ -203,6 +221,7 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 
 // Find the appropriate node for the given ID (of the nodes we know about)
 func (c *Cluster) Route(key NodeID) (*Node, error) {
+	c.debug("Determining route to the given NodeID: %v", key)
 	// check if we are responsible for the key
 	if betweenRightInc(c.self.predecessor.Id, c.self.Id, key) {
 		c.debug("I'm the target. Delievering message %v", key)
@@ -225,6 +244,7 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {
 
 // Handle new connections
 func (c *Cluster) handleConn(conn net.Conn) {
+	c.debug("Recieved a new connection")
 	defer conn.Close()
 	var msg Message
 	decoder := NewDecoder(conn)
@@ -241,17 +261,12 @@ func (c *Cluster) handleConn(conn net.Conn) {
 	// A node wants to join the network
 	// we need to find his appropriate successor
 	case NODE_JOIN:
-		succReq := c.NewMessage(SUCC_REQ, msg.sender, nil)
-		resp, err := c.Send(succReq)
+		var resp *Message
+		resp, err := c.onNodeJoin(msg)
 		if err != nil {
-			errMsg := c.statusErrMessage(msg.sender, err)
-			encoder.Encode(errMsg)
+			resp = c.statusErrMessage(msg.sender, err)
 			c.throwErr(err)
-			c.err(err.Error())
-			break
 		}
-
-		// respond with the found successor
 		encoder.Encode(resp)
 		break
 
@@ -263,75 +278,76 @@ func (c *Cluster) handleConn(conn net.Conn) {
 	// Recieved a heartbeat message from a connected
 	// client, let them know were still alive
 	case HEARTBEAT:
-		heartbeatMsg := c.NewMessage(STATUS_OK, msg.sender, nil)
+		resp := c.onHeartBeat(msg)
 		encoder.Encode(heartbeatMsg)
 		break
 
 	// We've been notified of a new predecessor
 	// node, so update our fingerTable
 	case NODE_NOTIFY:
+		var resp *Message
 		resp, err := c.onNotify(msg)
 		if err != nil {
+			resp = c.statusErrMessage(msg.sender, err)
 			c.throwErr(err)
-			c.err(err.Error())
 		}
 		encoder.Encode(resp)
 		break
 
 	// nil
-	case NODE_ANN:
-		break
+	//case NODE_ANN:
+	//	break
 
 	// Recieved a successor request from a node,
 	case SUCC_REQ:
+		var resp *Message
 		resp, err := c.onSuccessorRequest(msg)
 		if err != nil {
+			resp = c.statusErrMessage(msg.sender, err)
 			c.throwErr(err)
-			c.err(err.Error())
 		}
 		encoder.Encode(resp)
 		break
 
 	// Recieved a predecessor request from a node
 	case PRED_REQ:
+		var resp *Message
 		resp, err := c.onPredecessorRequest(msg)
 		if err != nil {
+			resp = c.statusErrMessage(msg.sender, err)
 			c.throwErr(err)
 		}
 		encoder.Encode(resp)
 		break
 
-	// Not an internal message, forward it on
+	// Not an internal message, forward or deliver it
 	default:
+		resp := c.statusOKMessage(msg.sender)
+		encoder.Encode(resp)
 		c.Send(msg)
+
 	}
-}
-
-// used in handleConn, responsed to the connection using the given encoder with the message. Error optional
-func (c *Cluster) sendResponse(encoder Encoder, msg *Message, err ...error) {
-
 }
 
 // Send Heartbeats to connected conns (in the cache or finger?)
 func (c *Cluster) sendHeartbeats() {
-
+	c.debug("Sending heartbeats...")
 	// iterate over the cached conns, and send heartbeat signals,
 	// if there's no response then remove it from the cache
 	// we're using the lfucache EvictIf function because it gives us the
 	// ability to iterate over all the items in the cache (connections)
 	// will look into a better cache iteration method later.
 	c.connCache.EvictIf(func(tempSock interface{}) bool {
-		go func() {
-			sock := tempSock.(*sock)
+		sock := tempSock.(*sock)
 
-			// Craft a heartbeat message, send and listen for the resp,
-			// if there's no response remove from cache (and finger?)
-			heartbeat := c.NewMessage(NODE_HEARTBEAT, nil, nil)
-			ack, err := c.sendToIP(sock.host, heartbeat)
-			if err != nil {
-				c.connCache.Delete(sock.host)
-			}
-		}()
+		// Craft a heartbeat message, send and listen for the resp,
+		// if there's no response remove from cache (and finger?)
+		heartbeat := c.NewMessage(NODE_HEARTBEAT, nil, nil)
+		ack, err := c.sendToIP(sock.host, heartbeat)
+		if err != nil {
+			c.debug("Removing cached node %v", sock.host)
+			return true
+		}
 
 		// Immediately notify cache NOT to delete this item for now (so we can run these in parallel)
 		return false
@@ -343,6 +359,7 @@ func (c *Cluster) sendHeartbeats() {
 
 // Send a message to a Specific IP in the network, block for messsage?
 func (c *Cluster) sendToIP(addr string, msg *Message) (*Message, error) {
+	c.debug("Sending message %v to address %v", msg.key, addr)
 	sock, err := c.getSock(addr)
 	if err != nil {
 		return nil, err
@@ -369,6 +386,7 @@ func (c *Cluster) sendToIP(addr string, msg *Message) (*Message, error) {
 
 // CHORD API - Find the first successor for the given ID
 func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {
+	c.debug("Finding successor to key %v", key)
 	request := c.NewMessage(SUCC_REQ, key, nil)
 	response, err := c.Send(request)
 	if err != nil {
@@ -393,6 +411,7 @@ func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {
 
 // CHORD API - Find the closest preceding node in the finger table
 func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
+	c.debug("Finding closest node in our finger table to node %v", key)
 	for _, finger := range c.fingerTable.table {
 		if betweenRightInc(c.self.Id, finger.node.Id, key) {
 			return finger.node, nil
@@ -405,13 +424,14 @@ func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
 
 // CHORD API - Stabilize successor/predecessor pointers
 func (c *Cluster) stabilize() error {
+	c.debug("stabilizing...")
 	// craft message for pred_req
 	predReq := c.NewMessage(PRED_REQ, c.self.successor.Id, nil)
 	resp, err := c.sendToIP(c.self.successor.Host, predReq)
 
 	if err != nil {
 		return err
-	} else if resp.purpose == ERROR {
+	} else if resp.purpose == STATUS_ERROR {
 		var errStr string
 		json.Unmarshal(resp.value, &errStr)
 		return errors.New(errStr)
@@ -427,7 +447,7 @@ func (c *Cluster) stabilize() error {
 		resp, err := c.notify(predecessor)
 		if err != nil {
 			return err
-		} else if resp.purpose == ERROR {
+		} else if resp.purpose == STATUS_ERROR {
 			return errors.New(string(resp.value))
 		}
 
@@ -442,8 +462,6 @@ func (c *Cluster) notify(n *Node) (*Message, error) {
 	c.debug("Notifying node: %v of our existence", n.Id)
 	ann := c.NewMessage(NODE_NOTIFY, n.Id, nil)
 	return c.sendToIP(n.Host, ann)
-
-	// Is there more?
 }
 
 // CHORD API - fix fingers
@@ -455,15 +473,25 @@ func (c *Cluster) fixFingers() {}
 //						//
 //////////////////////////
 
-func (c *Cluster) onDeliver(msg *Message) {}
+func (c *Cluster) onDeliver(msg *Message) {
+	c.debug("Delivering message to registered applications")
+}
 
-func (c *Cluster) onHeartBeat(msg *Message) *Message {}
+func (c *Cluster) onHeartBeat(msg *Message) *Message {
+	c.debug("Recieved heartbeat message from node %v", msg.sender)
+	return c.NewMessage(STATUS_OK, msg.sender, nil)
+}
 
-func (c *Cluster) onNodeJoin(msg *Message) {}
+func (c *Cluster) onNodeJoin(msg *Message) (*Message, error) {
+	c.debug("Recieved node join message from node %v", msg.sender)
+	req := c.NewMessage(SUCC_REQ, msg.sender, nil)
+	return c.Send(req)
+}
 
 func (c *Cluster) onNodeLeave(msg *Message) {}
 
 func (c *Cluster) onNotify(msg *Message) (*Message, error) {
+	c.debug("Node is notifying us of its existence")
 	err := json.Unmarshal(msg.value, &c.self.predecessor)
 	if err != nil {
 		return c.statusErrMessage(msg.sender, err), err
@@ -473,14 +501,14 @@ func (c *Cluster) onNotify(msg *Message) (*Message, error) {
 }
 
 func (c *Cluster) onSuccessorRequest(msg *Message) (*Message, error) {
-	c.debug("Recieved successor request from node: %v", msg.sender)
+	c.debug("Recieved successor request from node %v", msg.sender)
 	if c.self.IsResponsible(msg.target) {
 		// send successor
 		succ, err := json.Marshal(c.self.successor)
 		if err != nil {
-			return nil, err
+			return c.statusErrMessage(msg.sender, err), ere
 		}
-		return c.NewMessage(SUCC_RESP, msg.sender, succ), nil
+		return c.NewMessage(SUCC_REQ, msg.sender, succ), nil
 	} else {
 		// forward it on
 		return c.Send(msg)
@@ -493,9 +521,9 @@ func (c *Cluster) onPredecessorRequest(msg *Message) (*Message, error) {
 		// send successor
 		pred, err := json.Marshal(c.self.predecessor)
 		if err != nil {
-			return nil, err
+			return c.statusErrMessage(msg.sender, err), err
 		}
-		return c.NewMessage(SUCC_RESP, msg.sender, pred), nil
+		return c.NewMessage(PRED_REQ, msg.sender, pred), nil
 	} else {
 		// forward it on
 		return c.Send(msg)
@@ -506,20 +534,25 @@ func (c *Cluster) onPredecessorRequest(msg *Message) (*Message, error) {
 func (c *Cluster) forward(msg *Message, next *Node) bool {
 	c.debug("Checking if we should forward the given message")
 	forward = true
+
 	for _, app := range c.apps {
-		forward &= app.OnForward(msg, next)
+		forward = forward && app.OnForward(msg, next)
 	}
 
 	return forward
 }
 
+/*func (c *Cluster) onApp(appFn func(Application)) {
+	for _, app := range c.apps {
+		appFn(app)
+	}
+}*/
+
 // Handle any cluster errors
 func (c *Cluster) throwErr(err error) {
+	c.err(err.Error())
 	// Send the error through all the embedded apps
 	for _, app := range c.apps {
 		app.OnError(err)
 	}
-
-	//c.debug(err.Error())
-	c.err(err.Error())
 }

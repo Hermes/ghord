@@ -3,9 +3,7 @@ package ghord
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"log/syslog"
-	"math/rand"
 	"net"
 	"strconv"
 	"time"
@@ -156,7 +154,7 @@ func (c *Cluster) Join(ip string, port int) error {
 		return errors.New(string(resp.value))
 	}
 	var succ *Node
-	err = json.Unmarshal(resp.value, &succ)
+	err = json.Unmarshal(resp.value, succ)
 	if err != nil {
 		return err
 	}
@@ -171,7 +169,7 @@ func (c *Cluster) Join(ip string, port int) error {
 		return errors.New(string(resp.value))
 	}
 	var pred *Node
-	err = json.Unmarshal(resp.value, &pred)
+	err = json.Unmarshal(resp.value, pred)
 	if err != nil {
 		return err
 	}
@@ -197,26 +195,27 @@ func (c *Cluster) Send(msg Message) (*Message, error) {
 		c.throwErr(err)
 		return err
 	}
-	if target == c.self {
+	if target.Id == c.self.Id {
 		if msg.purpose > PRED_REQ {
 			c.onDeliver(msg)
 		}
 		return nil, nil
 	}
+
 	// decide if our application permits the message
-	forward := c.forward(msg, target)
-
-	// send the message
-	resp, err := c.sendToIP(target.Host, msg)
-	if err != nil {
-		c.throwErr(err)
-		return nil, err
-	} else if resp.purpose == STATUS_ERROR {
-		c.throwErr(err)
-		return resp, errors.New(string(resp.value))
+	if c.forward(msg, target) {
+		// send the message
+		resp, err := c.sendToIP(target.Host, msg)
+		if err != nil {
+			c.throwErr(err)
+			return nil, err
+		} else if resp.purpose == STATUS_ERROR {
+			c.throwErr(err)
+			return resp, errors.New(string(resp.value))
+		}
+		return resp, nil
 	}
-
-	return resp
+	return nil, nil
 }
 
 // Find the appropriate node for the given ID (of the nodes we know about)
@@ -232,7 +231,7 @@ func (c *Cluster) Route(key NodeID) (*Node, error) {
 	if betweenRightInc(c.self.Id, c.self.successor.Id, key) {
 		// our successor is the desired node
 		c.debug("Our successor is the target. Delievering message %s", key)
-		return c.self.successor
+		return c.self.successor, nil
 	}
 
 	// finally check if one our fingers is closer to (or is) the desired node
@@ -337,6 +336,8 @@ func (c *Cluster) sendHeartbeats() {
 	// we're using the lfucache EvictIf function because it gives us the
 	// ability to iterate over all the items in the cache (connections)
 	// will look into a better cache iteration method later.
+
+	// replace with heartbeat
 	c.connCache.EvictIf(func(tempSock interface{}) bool {
 		sock := tempSock.(*sock)
 
@@ -380,179 +381,4 @@ func (c *Cluster) sendToIP(addr string, msg *Message) (*Message, error) {
 	}
 
 	return resp, nil
-}
-
-// Chord API Method Calls //
-
-// CHORD API - Find the first successor for the given ID
-func (c *Cluster) findSuccessor(key NodeID) (*Node, error) {
-	c.debug("Finding successor to key %v", key)
-	request := c.NewMessage(SUCC_REQ, key, nil)
-	response, err := c.Send(request)
-	if err != nil {
-		return nil, err
-	}
-
-	if response.purpose == STATUS_ERROR {
-		return nil, errors.New(string(response.value))
-	}
-
-	var node *Node
-	err = json.Unmarshal(response.value, &node)
-	if err != nil {
-		return nil, err
-	}
-
-	return node, nil
-}
-
-// CHORD API - Find the first predecessor for the given ID
-// func (c *Cluster) findPredeccessor(key NodeID) (*Node, error) {}
-
-// CHORD API - Find the closest preceding node in the finger table
-func (c *Cluster) closestPreccedingNode(key NodeID) (*Node, error) {
-	c.debug("Finding closest node in our finger table to node %v", key)
-	for _, finger := range c.fingerTable.table {
-		if betweenRightInc(c.self.Id, finger.node.Id, key) {
-			return finger.node, nil
-		}
-		prev = finger.node
-	}
-
-	return nil, errors.New("No node exists for id: %s", key)
-}
-
-// CHORD API - Stabilize successor/predecessor pointers
-func (c *Cluster) stabilize() error {
-	c.debug("stabilizing...")
-	// craft message for pred_req
-	predReq := c.NewMessage(PRED_REQ, c.self.successor.Id, nil)
-	resp, err := c.sendToIP(c.self.successor.Host, predReq)
-
-	if err != nil {
-		return err
-	} else if resp.purpose == STATUS_ERROR {
-		var errStr string
-		json.Unmarshal(resp.value, &errStr)
-		return errors.New(errStr)
-	}
-
-	var predecessor *Node
-	err = json.Unmarshal(resp.value, &predecessor)
-
-	// check if our sucessor has a diff predecessor then us
-	// if so notify the new successor and update our own records
-	if c.self.Id != predecessor.Id {
-		c.debug("Found new predecessor! Id: %v", predecessor.Id)
-		resp, err := c.notify(predecessor)
-		if err != nil {
-			return err
-		} else if resp.purpose == STATUS_ERROR {
-			return errors.New(string(resp.value))
-		}
-
-		c.self.successor = predecessor
-	}
-
-	return nil
-}
-
-// CHORD API - Notify a Node of our existence
-func (c *Cluster) notify(n *Node) (*Message, error) {
-	c.debug("Notifying node: %v of our existence", n.Id)
-	ann := c.NewMessage(NODE_NOTIFY, n.Id, nil)
-	return c.sendToIP(n.Host, ann)
-}
-
-// CHORD API - fix fingers
-func (c *Cluster) fixFingers() {}
-
-//////////////////////////
-//						//
-// Application handlers //
-//						//
-//////////////////////////
-
-func (c *Cluster) onDeliver(msg *Message) {
-	c.debug("Delivering message to registered applications")
-}
-
-func (c *Cluster) onHeartBeat(msg *Message) *Message {
-	c.debug("Recieved heartbeat message from node %v", msg.sender)
-	return c.NewMessage(STATUS_OK, msg.sender, nil)
-}
-
-func (c *Cluster) onNodeJoin(msg *Message) (*Message, error) {
-	c.debug("Recieved node join message from node %v", msg.sender)
-	req := c.NewMessage(SUCC_REQ, msg.sender, nil)
-	return c.Send(req)
-}
-
-func (c *Cluster) onNodeLeave(msg *Message) {}
-
-func (c *Cluster) onNotify(msg *Message) (*Message, error) {
-	c.debug("Node is notifying us of its existence")
-	err := json.Unmarshal(msg.value, &c.self.predecessor)
-	if err != nil {
-		return c.statusErrMessage(msg.sender, err), err
-	}
-	return c.statusOKMessage(msg.sender), nil
-
-}
-
-func (c *Cluster) onSuccessorRequest(msg *Message) (*Message, error) {
-	c.debug("Recieved successor request from node %v", msg.sender)
-	if c.self.IsResponsible(msg.target) {
-		// send successor
-		succ, err := json.Marshal(c.self.successor)
-		if err != nil {
-			return c.statusErrMessage(msg.sender, err), ere
-		}
-		return c.NewMessage(SUCC_REQ, msg.sender, succ), nil
-	} else {
-		// forward it on
-		return c.Send(msg)
-	}
-}
-
-func (c *Cluster) onPredecessorRequest(msg *Message) (*Message, error) {
-	c.debug("Recieved predecessor request from node: %v", msg.sender)
-	if c.self.IsResponsible(msg.target) {
-		// send successor
-		pred, err := json.Marshal(c.self.predecessor)
-		if err != nil {
-			return c.statusErrMessage(msg.sender, err), err
-		}
-		return c.NewMessage(PRED_REQ, msg.sender, pred), nil
-	} else {
-		// forward it on
-		return c.Send(msg)
-	}
-}
-
-// Decide whether or not to continue forwarding the message through the network
-func (c *Cluster) forward(msg *Message, next *Node) bool {
-	c.debug("Checking if we should forward the given message")
-	forward = true
-
-	for _, app := range c.apps {
-		forward = forward && app.OnForward(msg, next)
-	}
-
-	return forward
-}
-
-/*func (c *Cluster) onApp(appFn func(Application)) {
-	for _, app := range c.apps {
-		appFn(app)
-	}
-}*/
-
-// Handle any cluster errors
-func (c *Cluster) throwErr(err error) {
-	c.err(err.Error())
-	// Send the error through all the embedded apps
-	for _, app := range c.apps {
-		app.OnError(err)
-	}
 }

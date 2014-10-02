@@ -1,15 +1,8 @@
 package ghord
 
 import (
-	"crypto/sha1"
 	"encoding/json"
 	"errors"
-	"hash"
-)
-
-var (
-	// Hashing function to use for all chord IDs and utilities
-	hasher hash.Hash = sha1.New()
 )
 
 // Global Encoder/ Decoder

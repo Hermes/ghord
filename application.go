@@ -53,11 +53,12 @@ func (c *Cluster) onNodeJoin(msg *Message) (*Message, error) {
 	return c.Send(req)
 }
 
+// Called when a NODE_LEAVE message is recieved
 func (c *Cluster) onNodeLeave(msg *Message) {}
 
 func (c *Cluster) onNotify(msg *Message) (*Message, error) {
-	c.debug("Node is notifying us of its existence")
-	err := json.Unmarshal(msg.value, &c.self.predecessor)
+	c.debug("Node %v is notifying us of its existence", msg.origin.Id)
+	err := msg.DecodeBody(c.codec, &c.self.predecessor)
 	if err != nil {
 		return c.statusErrMessage(msg.sender, err), err
 	}

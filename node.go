@@ -31,6 +31,5 @@ func NewNode(id NodeID, host string, port int) *Node {
 
 // Returns true if this node is responsible for the given NodeID
 func (n *Node) IsResponsible(id NodeID) bool {
-	return id.Greater(n.predecessor) &&
-		id.Less(n.Id) || id.Equal(n.Id)
+	return (id.Greater(n.predecessor.Id) && id.Less(n.Id)) || id.Equal(n.Id)
 }

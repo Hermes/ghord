@@ -1,14 +1,18 @@
 package ghord
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
+	"hash"
 	"log/syslog"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/calmh/lfucache"
+	"github.com/hermes/ghord/codec"
+	"github.com/hermes/ghord/codec/json"
+	"github.com/hermes/ghord/hash/sha1"
 )
 
 //Cluster Struct
@@ -44,7 +48,10 @@ type Cluster struct {
 	connTimeout   time.Duration
 	joined        bool
 	creds         credentials
-	//transport     transport
+
+	// Codec & Hashing Suites
+	codec  codec.Codec
+	hasher Hasher
 
 	connenctions chan net.Conn
 	cacheSize    int
@@ -64,9 +71,10 @@ var (
 )
 
 // Create a new Cluster
-func NewCluster(n *Node, options ...ClusterOptions) *Cluster {
+func NewCluster(self *Node, options ...ClusterOptions) *Cluster {
+	hasher := sha1.NewHasher()
 	return &Cluster{
-		self: n,
+		self: self,
 		kill: make(chan bool),
 		log, logger,
 		logLevel, syslog.LOG_ERR,
@@ -74,10 +82,12 @@ func NewCluster(n *Node, options ...ClusterOptions) *Cluster {
 		stabilizeMax: time.Second * 10,
 		heartbeat:    time.Second * 10,
 		connTimeout:  time.Second * 30,
+		codec:        json.NewCodec(),
+		hasher:       hasher,
 		numFingers:   hasher.Size() * 8,
 		connnections: make(chan net.Conn),
-		cacheSize:    (hasher.Size() * 8) / 2,
-		connCache:    lfucache.New((hasher.Size() * 8) / 2),
+		//cacheSize:    (hasher.Size() * 8) / 2,
+		//connCache:    lfucache.New((hasher.Size() * 8) / 2),
 	}
 }
 
@@ -117,8 +127,7 @@ func (c *Cluster) Listen() error {
 			return nil
 		case <-time.After(c.heartbeatFreq):
 			c.debug("Sending heartbeats")
-			go c.sendHeartbeats()
-			break
+			//go c.sendHeartbeats()
 		// Run the stabilize routine randomly between stabilizeMin and stabilizeMax
 		case <-time.After(time.Duration(randRange(c.stabilizeMin.Nanoseconds(), c.stabilizeMax.Nanoseconds()))):
 			c.debug("Running stabilize routine")
@@ -126,7 +135,6 @@ func (c *Cluster) Listen() error {
 		case conn := <-connections:
 			c.debug("Handling connection")
 			go c.handleConn(conn)
-			break
 		}
 	}
 
@@ -144,21 +152,29 @@ func (c *Cluster) Stop() {
 // Join the network, using a node known to be on the network identified by ip:port
 func (c *Cluster) Join(ip string, port int) error {
 	c.debug("Joing Chord DHT using source node %v:%v", ip, port)
-	// get our successor in the network
 	address := ip + ":" + strconv.Itoa(port)
-	succReq := NewMessage(NODE_JOIN, c.self.Id, nil)
+	var buf bytes.Buffer
+
+	// get our successor in the network
+	succReq := c.NewMessage(NODE_JOIN, c.self.Id, nil)
 	resp, err := c.sendToIP(address, succReq)
 	if err != nil {
 		return err
 	} else if resp.purpose == STATUS_ERROR {
 		return errors.New(string(resp.value))
 	}
+
+	// parse the successor
 	var succ *Node
-	err = json.Unmarshal(resp.value, succ)
+	buf = bytes.NewBuffer(resp.value)
+	err = c.Decode(buf, succ)
 	if err != nil {
 		return err
 	}
 	c.self.successor = succ
+
+	// reset buffer for reuse
+	buf.Reset()
 
 	// Get our successors predecessor
 	predReq := c.NewMessage(PRED_REQ, succ, nil)
@@ -168,8 +184,11 @@ func (c *Cluster) Join(ip string, port int) error {
 	} else if resp.purpose == STATUS_ERROR {
 		return errors.New(string(resp.value))
 	}
+
+	// parse the predecessor
 	var pred *Node
-	err = json.Unmarshal(resp.value, pred)
+	buf.Write(resp.value)
+	err = c.Decode(buf, v)
 	if err != nil {
 		return err
 	}
@@ -246,8 +265,8 @@ func (c *Cluster) handleConn(conn net.Conn) {
 	c.debug("Recieved a new connection")
 	defer conn.Close()
 	var msg Message
-	decoder := NewDecoder(conn)
-	encoder := NewEncoder(conn)
+	decoder := c.codec.NewDecoder(conn)
+	encoder := c.codec.NewEncoder(conn)
 	if err := decoder.Decode(&msg); err != nil {
 		c.throwErr(err)
 		return
@@ -255,18 +274,17 @@ func (c *Cluster) handleConn(conn net.Conn) {
 	msg.hops++
 	c.debug("Recieved a message with purpose %v from node %v", msg.purpose, msg.sender)
 
+	var resp *Message
 	switch msg.purpose {
-
 	// A node wants to join the network
 	// we need to find his appropriate successor
 	case NODE_JOIN:
-		var resp *Message
 		resp, err := c.onNodeJoin(msg)
 		if err != nil {
 			resp = c.statusErrMessage(msg.sender, err)
 			c.throwErr(err)
 		}
-		encoder.Encode(resp)
+		c.reply(msg.Origin(), resp)
 		break
 
 	// A node wants to leave the network
@@ -284,7 +302,6 @@ func (c *Cluster) handleConn(conn net.Conn) {
 	// We've been notified of a new predecessor
 	// node, so update our fingerTable
 	case NODE_NOTIFY:
-		var resp *Message
 		resp, err := c.onNotify(msg)
 		if err != nil {
 			resp = c.statusErrMessage(msg.sender, err)
@@ -329,7 +346,7 @@ func (c *Cluster) handleConn(conn net.Conn) {
 }
 
 // Send Heartbeats to connected conns (in the cache or finger?)
-func (c *Cluster) sendHeartbeats() {
+/*func (c *Cluster) sendHeartbeats() {
 	c.debug("Sending heartbeats...")
 	// iterate over the cached conns, and send heartbeat signals,
 	// if there's no response then remove it from the cache
@@ -356,7 +373,7 @@ func (c *Cluster) sendHeartbeats() {
 
 	// Should I also iterate over the finger table?
 	// for now no...
-}
+}*/ // NEED TO REORGINIZE
 
 // Send a message to a Specific IP in the network, block for messsage?
 func (c *Cluster) sendToIP(addr string, msg *Message) (*Message, error) {
@@ -381,4 +398,12 @@ func (c *Cluster) sendToIP(addr string, msg *Message) (*Message, error) {
 	}
 
 	return resp, nil
+}
+
+func (c *Cluster) Encode(dataBuf bytes.Buffer, v interface{}) error {
+	return c.codec.NewEncoder(dataBuf).Encoder(v)
+}
+
+func (c *Cluster) Decode(dataBuf bytes.Buffer, v interface{}) error {
+	return c.codec.NewDecoder(dataBuf).Decode(v)
 }

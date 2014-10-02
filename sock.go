@@ -15,15 +15,15 @@ type sock struct {
 	dec  *Decoder
 }
 
-func newSock(conn *net.TCPConn) *sock {
+func (c *Cluster) newSock(conn *net.TCPConn) *sock {
 	conn.SetNoDelay(true)
 	conn.SetKeepAlive(true)
 	return &sock{
 		host: conn.RemoteAddr().String(),
 		conn: conn,
 		used: time.Now(),
-		enc:  NewEncoder(conn),
-		dec:  NewDecoder(conn),
+		enc:  c.codec.NewEncoder(conn),
+		dec:  c.codec.NewDecoder(conn),
 	}
 }
 
@@ -41,7 +41,7 @@ func (s *sock) read(m *Message) error {
 // NOTE: the ...int for port is a hack to get overloading (or something like it) working
 func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 
-	// Normiliza the address (either given full address as string, or as ip:port components)
+	// Normiliza the address (either given full address as string, or as ip, port components)
 	var address string
 	if len(port) == 1 {
 		address = addr + ":" + strconv.Itoa(port[0])

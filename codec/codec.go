@@ -1,11 +1,6 @@
 package codec
 
-import (
-	"encoding/gob"
-	"encoding/json"
-	"errors"
-	"io"
-)
+import "io"
 
 // Standard encoder interface, usually created from an io.Writer
 // Important: Needs to be stateless, in that each call to Encode() must

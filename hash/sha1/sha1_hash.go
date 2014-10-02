@@ -11,7 +11,8 @@ func NewHasher() Sha1Hasher {
 }
 
 func (sh Sha1Hasher) Hash(data []byte) []byte {
-	return sha1.Sum(data)[0:sha1.Size]
+	hash := sha1.Sum(data)
+	return hash[0:sh.Size()]
 }
 
 func (sh Sha1Hasher) Size() int {

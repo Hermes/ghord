@@ -19,7 +19,7 @@ type NodeID []byte
 
 // Create a hashed NodeID from a given byte array
 func (c *Cluster) NodeIDFromBytes(id []byte) NodeID {
-	return NodeID(c.hasher.Hash(data))
+	return NodeID(c.hasher.Hash(id))
 }
 
 func (n NodeID) String() string {
@@ -31,9 +31,8 @@ func (n NodeID) Add(i *big.Int) NodeID {
 	newVal := big.NewInt(0)
 	y := big.NewInt(0)
 	y.SetBytes(n)
-	x := big.NewInt(i)
 
-	return NodeID(newVal.Add(x, y).Bytes())
+	return NodeID(newVal.Add(y, i).Bytes())
 }
 
 // Returns true iff NodeID n < id

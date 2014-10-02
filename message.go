@@ -1,6 +1,10 @@
 package ghord
 
-import ()
+import (
+	"bytes"
+
+	"github.com/hermes/ghord/codec"
+)
 
 //
 //NOTES
@@ -23,11 +27,10 @@ const (
 type Message struct {
 	id      NodeID // Message unique id
 	key     NodeID // Message Key
-	purpose uint   // The purpose of the message
-	origin  Node   // The node from whom the messages originated
+	purpose int    // The purpose of the message
 	sender  Node   // The node who sent the message
 	target  Node   // The targer node of the message
-	hops    uint   // Number of hops so far taken by the message
+	hops    int    // Number of hops so far taken by the message
 	body    []byte // Content of message
 }
 
@@ -38,7 +41,7 @@ func (c *Cluster) NewMessage(purpose int, key NodeID, body []byte) *Message {
 		key:     key,
 		body:    body,
 		purpose: purpose,
-		sender:  c.self,
+		sender:  *c.self,
 		hops:    0,
 	}
 }
@@ -50,7 +53,7 @@ func (msg *Message) Key() NodeID {
 
 // Get the message body
 func (msg *Message) Body() []byte {
-	return msg.value
+	return msg.body
 }
 
 // Get the message purpose
@@ -61,11 +64,6 @@ func (msg *Message) Purpose() int {
 // Get the message hops taken
 func (msg *Message) Hops() int {
 	return msg.hops
-}
-
-// Get the message origin node
-func (msg *Message) Origin() Node {
-	return msg.origin
 }
 
 // Get the message target node
@@ -86,15 +84,15 @@ func (msg *Message) DecodeBody(codec codec.Codec, v interface{}) error {
 // Helper utilies for creating specific messages
 
 func (c *Cluster) nodeJoinMessage(key NodeID) *Message {
-	return NewMessage(NODE_J, key, nil)
+	return c.NewMessage(NODE_JOIN, key, nil)
 }
 
 func (c *Cluster) heartBeatMessage(key NodeID) *Message {
-	return NewMessage(NODE_HEARTBEAT, key, nil)
+	return c.NewMessage(HEARTBEAT, key, nil)
 }
 
 func (c *Cluster) notifyMessage(key NodeID) *Message {
-	return NewMessage(NODE_NOTIFY, key, nil)
+	return c.NewMessage(NODE_NOTIFY, key, nil)
 }
 
 func (c *Cluster) statusOKMessage(key NodeID) *Message {
@@ -102,5 +100,5 @@ func (c *Cluster) statusOKMessage(key NodeID) *Message {
 }
 
 func (c *Cluster) statusErrMessage(key NodeID, err error) *Message {
-	return c.NewMessage(STATUS_ERROR, target, []byte(err.Error()))
+	return c.NewMessage(STATUS_ERROR, key, []byte(err.Error()))
 }

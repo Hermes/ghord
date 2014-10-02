@@ -1,6 +1,6 @@
 package ghord
 
-import "encoding/json"
+import "bytes"
 
 //Application Handler/Callback/Delegate
 type Application interface {
@@ -8,7 +8,7 @@ type Application interface {
 	OnError(err error)
 
 	// Recieved a message intended for the self node
-	OnDeliver(msg Message)
+	OnDeliver(msg *Message)
 
 	// Recieved a message that needs to be routed onwards
 	OnForward(msg *Message, node *Node) bool // return False if ghord should not forward
@@ -40,16 +40,16 @@ func (c *Cluster) onDeliver(msg *Message) {
 }
 
 func (c *Cluster) onHeartBeat(msg *Message) *Message {
-	c.debug("Recieved heartbeat message from node %v", msg.sender)
+	c.debug("Recieved heartbeat message from node %v", msg.sender.Id)
 	for _, app := range c.apps {
-		app.OnHeartbeat(msg.Sender())
+		go app.OnHeartbeat(msg.sender)
 	}
-	return c.NewMessage(STATUS_OK, msg.sender, nil)
+	return c.NewMessage(STATUS_OK, msg.sender.Id, nil)
 }
 
 func (c *Cluster) onNodeJoin(msg *Message) (*Message, error) {
-	c.debug("Recieved node join message from node %v", msg.sender)
-	req := c.NewMessage(SUCC_REQ, msg.sender, nil)
+	c.debug("Recieved node join message from node %v", msg.sender.Id)
+	req := c.NewMessage(SUCC_REQ, msg.sender.Id, nil)
 	return c.Send(req)
 }
 
@@ -57,49 +57,53 @@ func (c *Cluster) onNodeJoin(msg *Message) (*Message, error) {
 func (c *Cluster) onNodeLeave(msg *Message) {}
 
 func (c *Cluster) onNotify(msg *Message) (*Message, error) {
-	c.debug("Node %v is notifying us of its existence", msg.origin.Id)
+	c.debug("Node %v is notifying us of its existence", msg.sender.Id)
 	err := msg.DecodeBody(c.codec, &c.self.predecessor)
 	if err != nil {
-		return c.statusErrMessage(msg.sender, err), err
+		return c.statusErrMessage(msg.sender.Id, err), err
 	}
-	return c.statusOKMessage(msg.sender), nil
-
+	return c.statusOKMessage(msg.sender.Id), nil
 }
 
+// Handle a succesor request we've recieved
 func (c *Cluster) onSuccessorRequest(msg *Message) (*Message, error) {
-	c.debug("Recieved successor request from node %v", msg.sender)
-	if c.self.IsResponsible(msg.target) {
+	c.debug("Recieved successor request from node %v", msg.sender.Id)
+	if c.self.IsResponsible(msg.target.Id) {
 		// send successor
-		succ, err := json.Marshal(c.self.successor)
+		buf := bytes.NewBuffer(make([]byte, 0))
+		err := c.Encode(buf, c.self.successor)
 		if err != nil {
-			return c.statusErrMessage(msg.sender, err), ere
+			return c.statusErrMessage(msg.sender.Id, err), err
 		}
-		return c.NewMessage(SUCC_REQ, msg.sender, succ), nil
+		return c.NewMessage(SUCC_REQ, msg.sender.Id, buf.Bytes()), nil
 	} else {
 		// forward it on
-		return c.Send(msg)
+		go c.Send(msg)
+		return c.statusOKMessage(msg.sender.Id), nil
 	}
 }
 
 func (c *Cluster) onPredecessorRequest(msg *Message) (*Message, error) {
-	c.debug("Recieved predecessor request from node: %v", msg.sender)
-	if c.self.IsResponsible(msg.target) {
+	c.debug("Recieved predecessor request from node: %v", msg.sender.Id)
+	if c.self.IsResponsible(msg.target.Id) {
 		// send successor
-		pred, err := json.Marshal(c.self.predecessor)
+		buf := bytes.NewBuffer(make([]byte, 0))
+		err := c.Encode(buf, c.self.predecessor)
 		if err != nil {
-			return c.statusErrMessage(msg.sender, err), err
+			return c.statusErrMessage(msg.sender.Id, err), err
 		}
-		return c.NewMessage(PRED_REQ, msg.sender, pred), nil
+		return c.NewMessage(PRED_REQ, msg.sender.Id, buf.Bytes()), nil
 	} else {
 		// forward it on
-		return c.Send(msg)
+		go c.Send(msg)
+		return c.statusOKMessage(msg.sender.Id), nil
 	}
 }
 
 // Decide whether or not to continue forwarding the message through the network
 func (c *Cluster) forward(msg *Message, next *Node) bool {
 	c.debug("Checking if we should forward the given message")
-	forward = true
+	forward := true
 
 	for _, app := range c.apps {
 		forward = forward && app.OnForward(msg, next)

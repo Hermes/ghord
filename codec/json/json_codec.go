@@ -3,30 +3,24 @@ package json
 import (
 	"encoding/json"
 	"io"
+
+	"github.com/hermes/ghord/codec"
 )
 
 type Codec struct{}
 
-func NewCodec() JSONCodec {
-	return JSONCodec{}
+func NewCodec() Codec {
+	return Codec{}
 }
 
 func (c Codec) Name() string {
 	return "json"
 }
 
-func (c Codec) NewEncoder(w io.Writer) *json.Encoder {
+func (c Codec) NewEncoder(w io.Writer) codec.Encoder {
 	return json.NewEncoder(w)
 }
 
-func (c Codec) NewDecoder(r io.Reader) *json.Decoder {
+func (c Codec) NewDecoder(r io.Reader) codec.Decoder {
 	return json.NewDecoder(r)
-}
-
-func (c Codec) Encode(v interface{}) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-func (c Codec) Encode(data interface{}, v interface{}) error {
-	return json.Unmarshal(data, v)
 }

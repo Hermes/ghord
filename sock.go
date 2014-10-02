@@ -1,27 +1,24 @@
 package ghord
 
 import (
-	"encoding/gob"
 	"net"
-	"sync"
-	"time"
+
+	"github.com/hermes/ghord/codec"
 )
 
 type sock struct {
 	host string
-	conn *net.TCPConn
-	used time.Time
-	enc  *Encoder
-	dec  *Decoder
+	conn net.Conn
+	enc  codec.Encoder
+	dec  codec.Decoder
 }
 
-func (c *Cluster) newSock(conn *net.TCPConn) *sock {
-	conn.SetNoDelay(true)
-	conn.SetKeepAlive(true)
+func (c *Cluster) newSock(conn net.Conn) *sock {
+	//conn.SetNoDelay(true)
+	//conn.SetKeepAlive(true)
 	return &sock{
 		host: conn.RemoteAddr().String(),
 		conn: conn,
-		used: time.Now(),
 		enc:  c.codec.NewEncoder(conn),
 		dec:  c.codec.NewDecoder(conn),
 	}
@@ -39,7 +36,7 @@ func (s *sock) read(m *Message) error {
 
 // Create a new connection (or get it from the cache) to a node, and add it to the sock pool
 // NOTE: the ...int for port is a hack to get overloading (or something like it) working
-func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
+/*func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 
 	// Normiliza the address (either given full address as string, or as ip, port components)
 	var address string
@@ -68,4 +65,4 @@ func (c *Cluster) getSock(addr string, port ...int) (*sock, error) {
 func (c *Cluster) putSock(s *sock) {
 	s.used = time.Now()
 	c.connCache.Insert(s.host, s)
-}
+}*/

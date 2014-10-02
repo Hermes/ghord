@@ -6,14 +6,20 @@ import (
 	"math/big"
 )
 
+// Represents a Hash algorithm
+type Hasher interface {
+	Hash(data []byte) []byte
+	Size() int
+}
+
 // Represents a NodeID in the form of a hash
+// Unless you know what you are doing, do not create a
+// NodeID yourself, always use NodeIDFromBytes().
 type NodeID []byte
 
 // Create a hashed NodeID from a given byte array
-func NodeIDFromBytes(id []byte) NodeID {
-	hasher.Reset()
-	hasher.Write(id)
-	return NodeId(hasher.Sum(nil))
+func (c *Cluster) NodeIDFromBytes(id []byte) NodeID {
+	return NodeID(c.hasher.Hash(data))
 }
 
 func (n NodeID) String() string {
